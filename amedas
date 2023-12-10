@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2019-2023, Yaskawa Tosiha
+#
+import argparse
+import sys
+import urllib.request
+import re
+import json
+import datetime
+import os
+import logging
+
+JSONFILE = '/var/local/munin/amedas.json'   # 10分毎に cron で更新
+LOGFILE = '/var/local/munin/amedas.log'
+
+# locations - area_code: (city, prefecture)
+locations = {
+    '14163': ('Sapporo', 'Hokkaido'),
+    '44132': ('Tokyo', 'Tokyo'),
+    '46106': ('Yokohama', 'Kanagawa'),
+    '51106': ('Nagoya', 'Aichi'),
+    '55091': ('Takaoka', 'Toyama'),
+    '55102': ('Toyama', 'Toyama'),
+    '61286': ('Kyoto', 'Kyoto'),
+    '62078': ('Osaka', 'Osaka'),
+    '82182': ('Fukuoka', 'Fukuoka'),
+    '88317': ('Kagoshima', 'Kagoshima'),
+    '91197': ('Naha', 'Okinawa'),
+    }
+
+def get_from_jma(data_json, amdno, t):
+    """
+    www.jma.go.jp/bosai/amedas/ から 10分毎の気温、雨量、風向、風力、日照を得る
+    """
+    func_name = 'get_from_jma()'
+    h = t.hour
+    h3 = h - (h % 3)
+    url = 'https://www.jma.go.jp/bosai/amedas/data/point/{}/{:%Y%m%d}_{:02}.json'.format(amdno, t, h3)
+    logger.debug('get_from_jma(): url={}'.format(url))
+    try:
+        with urllib.request.urlopen(url) as f:
+            fetched_data = json.load(f)
+    except urllib.error.HTTPError as err:
+        logger.error(err)
+        return
+    except urllib.error.URLError as err:
+        logger.error(err)
+        return
+    except ConnectionResetError:
+        logger.warning('{}: get_from_jma(): Connection reset by peer'.format(func_name))
+        return
+    if amdno not in data_json:
+        logger.debug('{}: add area_code {} to data_json'.format(func_name, amdno))
+        data_json[amdno] = {'snow': 'U'}
+    tar_time = max(fetched_data.keys())
+    logger.debug('{}: elem={}'.format(func_name, fetched_data[tar_time]))
+
+    data_json[amdno]['time'] = tar_time
+    for k,v in fetched_data[tar_time].items():
+        if k == 'prefNumber':
+            data_json[amdno]['prefNumber'] = v
+        elif k == 'temp':
+            data_json[amdno]['temp'] = v[0]
+        elif k == 'humidity':
+            data_json[amdno]['humidity'] = v[0]
+        elif k == 'precipitation10m':
+            data_json[amdno]['precipitation10m'] = v[0]
+        elif k == 'precipitation1h':
+            data_json[amdno]['precipitation1h'] = v[0]
+        elif k == 'pressure':
+            data_json[amdno]['pressure'] = v[0]
+        elif k == 'sun10m':
+            data_json[amdno]['sun10m'] = v[0]
+        elif k == 'windDirection':
+            data_json[amdno]['windDirection'] = v[0]
+        elif k == 'wind':
+            data_json[amdno]['wind'] = v[0]
+        elif k == 'snow':
+            data_json[amdno]['snow'] = v[0]
+
+
+def update_data():
+    """data save"""
+    # 既存のデータを読み込む
+    try:
+        with open(JSONFILE, 'r') as f:
+            data_json = json.load(f)
+    except FileNotFoundError:
+        data_json = {}
+    # latest_time.txt を処理
+    url = 'https://www.jma.go.jp/bosai/amedas/data/latest_time.txt'
+    try:
+        with urllib.request.urlopen(url) as f:
+            html = f.read().decode('utf-8')
+    except urllib.error.HTTPError as err:
+        logger.warning(err)
+        return
+    except urllib.error.URLError as err:
+        logger.warning(err)
+        return
+    except ConnectionResetError:
+        logger.warning('Connection reset by peer')
+        return
+    logger.debug(html)
+    latest_time = datetime.datetime.fromisoformat(html)
+    # 各場所の処理
+    for amdno in locations:
+        '''気象庁(10min)'''
+        get_from_jma(data_json, amdno, latest_time)
+    # Output to json file
+    with open(JSONFILE, 'w') as fp:
+        json.dump(data_json, fp, indent=1, sort_keys=True)
+    os.chmod(JSONFILE, 0o664)
+
+def print_config(data):
+    for amdno,info in locations.items():
+        citypref = "{},{}".format(info[0], info[1])
+        if 'temp' in data[amdno]:
+            print('multigraph amedas_{0}.temp'.format(amdno))
+            print('graph_title {0} {1} - Temperature'.format(amdno, citypref))
+            print("graph_args --base 1000 -u 25 -l 5 -y 5:1")
+            print("graph_vlabel celsius")
+            print("graph_category weather")
+            print("graph_info This graph shows temperatures fetched from jma.go.jp.")
+            print("graph_scale no")
+            print('temp.label temp')
+            print('temp.info {}'.format(citypref))
+            print('temp.type GAUGE')
+            print('')
+        if 'humidity' in data[amdno]:
+            print('multigraph amedas_{0}.humidity'.format(amdno))
+            print('graph_title {0} {1} - Humidity'.format(amdno, citypref))
+            print("graph_args --base 1000 -u 100 -l 20 -y 10:1")
+            print("graph_vlabel %")
+            print("graph_category weather")
+            print("graph_info This graph shows Humidity fetched from jma.go.jp.")
+            print("graph_scale no")
+            print('humidity.label humidity')
+            print('humidity.info {}'.format(citypref))
+            print('humidity.type GAUGE')
+            print('')
+        if 'precipitation10m' in data[amdno]:
+            print('multigraph amedas_{0}.precipitation'.format(amdno))
+            print('graph_title {0} {1} - Precipitation'.format(amdno, citypref))
+            print("graph_args --base 1000 -l 0 -u 8")
+            print("graph_vlabel mm")
+            print("graph_category weather")
+            print("graph_info This graph shows amount of precipitation every 10 minutes")
+            print("graph_scale no")
+            print('precipitation10m.label 10 minutes')
+            print('precipitation10m.info Precipitation 10 minutes')
+            print('precipitation10m.draw AREA')
+            print('precipitation1h.label 1 hour')
+            print('precipitation1h.info Precipitation 1 hour')
+            print('')
+        if 'pressure' in data[amdno]:
+            print('multigraph amedas_{0}.pressure'.format(amdno))
+            print('graph_title {0} {1} - Pressure'.format(amdno, citypref))
+            print("graph_args --base 1000 -l 980 -u 1030 -y 10:1")
+            print("graph_vlabel hPa")
+            print("graph_category weather")
+            print("graph_info This graph shows Atmospheric Pressure.")
+            print("graph_scale no")
+            print('pressure.label pressure')
+            print('pressure.info {}'.format(citypref))
+            print('pressure.type GAUGE')
+            print('')
+        if 'wind' in data[amdno]:
+            print('multigraph amedas_{0}.wind'.format(amdno))
+            print('graph_title {0} {1} - Wind speed'.format(amdno, citypref))
+            print("graph_args --base 1000 -u 10 -l 0")
+            print("graph_vlabel m/sec.")
+            print("graph_category weather")
+            print("graph_info This graph shows Wind Speed.")
+            print("graph_scale no")
+            print('wind.label wind')
+            print('wind.info {}'.format(citypref))
+            print('wind.type GAUGE')
+            print('')
+        if 'windDirection' in data[amdno]:
+            print('multigraph amedas_{0}.wdir'.format(amdno))
+            print('graph_title {0} {1} - wind direction'.format(amdno, citypref))
+            print("graph_args --base 1000 -u 360 -l 0 -y 90:2")
+            print("graph_vlabel N:0 E:90 S:180 W:270")
+            print("graph_category weather")
+            print("graph_info This graph shows wind direction.")
+            print("graph_scale no")
+            print('wdir.label direction')
+            print('wdir.info {}'.format(citypref))
+            print('wdir.type GAUGE')
+            print('')
+        if 'snow' in data[amdno]:
+            print('multigraph amedas_{0}.snow'.format(amdno))
+            print('graph_title {0} {1} - Snow depth'.format(amdno, citypref))
+            print("graph_args --base 1000 -u 10")
+            print("graph_vlabel cm")
+            print("graph_category weather")
+            print("graph_info This graph shows Snow depth.")
+            print("graph_scale no")
+            print('snow.label snow')
+            print('snow.info {}'.format(citypref))
+            print('snow.type GAUGE')
+            print('')
+ 
+#-------------------------------------------------------------------------- main
+parser = argparse.ArgumentParser()
+subparsers = parser.add_subparsers(dest='command')
+parser_autoconf = subparsers.add_parser('autoconf', help='check auto command')
+parser_config   = subparsers.add_parser('config',   help='config command')
+parser_update   = subparsers.add_parser('update',   help='update command')
+parser.add_argument("-d", "--debug", help="debug mode", action="store_true")
+args = parser.parse_args()
+
+# basicConfig are main code only
+logging.basicConfig(filename=LOGFILE,
+            format='%(asctime)s %(levelname)s: %(message)s',
+            level=(logging.DEBUG if args.debug else logging.INFO))
+# getLogger written are all code
+logger = logging.getLogger(__name__)
+
+if args.command == 'update':
+    update_data()
+    exit(0)
+
+if args.command == "autoconf":
+    print('yes')
+    exit(0)
+
+# Read Data File
+with open(JSONFILE, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+
+if args.command == "config":
+    print_config(data)
+    exit(0)
+
+for amdno,info in locations.items():
+    if 'temp' in data[amdno]:
+        print('multigraph amedas_{0}.temp'.format(amdno))
+        print('temp.value {}'.format(data[amdno]['temp'])) 
+    if 'humidity' in data[amdno]:
+        print('multigraph amedas_{0}.humidity'.format(amdno))
+        print('humidity.value {}'.format(data[amdno]['humidity'])) 
+    if 'precipitation10m' in data[amdno]:
+        print('multigraph amedas_{0}.precipitation'.format(amdno))
+        print('precipitation10m.value {}'.format(data[amdno]['precipitation10m'] if 'precipitation10m' in data[amdno] else 'U')) 
+        print('precipitation1h.value {}'.format(data[amdno]['precipitation1h'] if 'precipitation1h' in data[amdno] else 'U')) 
+    if 'pressure' in data[amdno]:
+        print('multigraph amedas_{0}.pressure'.format(amdno))
+        print('pressure.value {}'.format(data[amdno]['pressure'] if 'pressure' in data[amdno] else 'U')) 
+    if 'wind' in data[amdno]:
+        print('multigraph amedas_{0}.wind'.format(amdno))
+        print('wind.value {}'.format(data[amdno]['wind'] if 'wind' in data[amdno] else 'U'))
+    if 'windDirection' in data[amdno]:
+        print('multigraph amedas_{0}.wdir'.format(amdno))
+        print('wdir.value {}'.format(data[amdno]['windDirection'] * 22.5 if 'windDirection' in data[amdno] else 'U'))
+    if 'snow' in data[amdno]:
+        print('multigraph amedas_{0}.snow'.format(amdno))
+        print('snow.value {}'.format(data[amdno]['snow'])) 
+#EOF
