@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2019-2023, Yaskawa Tosiha
+# Copyright (C) 2019-2023, Tosiha Yaskawa
 #
 import argparse
 import sys
@@ -30,11 +30,13 @@ locations = {
     '91197': ('Naha', 'Okinawa'),
     }
 
+# 'temp','humidity','precipitation10m','precipitation1h','wind','windDirection','pressure','snow'
+graph_excloude = ['windDirection'];
+
 def get_from_jma(data_json, amdno, t):
     """
     www.jma.go.jp/bosai/amedas/ から 10分毎の気温、雨量、風向、風力、日照を得る
     """
-    func_name = 'get_from_jma()'
     h = t.hour
     h3 = h - (h % 3)
     url = 'https://www.jma.go.jp/bosai/amedas/data/point/{}/{:%Y%m%d}_{:02}.json'.format(amdno, t, h3)
@@ -49,13 +51,13 @@ def get_from_jma(data_json, amdno, t):
         logger.error(err)
         return
     except ConnectionResetError:
-        logger.warning('{}: get_from_jma(): Connection reset by peer'.format(func_name))
+        logger.warning('Connection reset by peer')
         return
     if amdno not in data_json:
-        logger.debug('{}: add area_code {} to data_json'.format(func_name, amdno))
+        logger.debug('add area_code {} to data_json'.format(amdno))
         data_json[amdno] = {'snow': 'U'}
     tar_time = max(fetched_data.keys())
-    logger.debug('{}: elem={}'.format(func_name, fetched_data[tar_time]))
+    logger.debug('elem={}'.format(fetched_data[tar_time]))
 
     data_json[amdno]['time'] = tar_time
     for k,v in fetched_data[tar_time].items():
@@ -141,7 +143,7 @@ def print_config(data):
             print('humidity.info {}'.format(citypref))
             print('humidity.type GAUGE')
             print('')
-        if 'precipitation10m' in data[amdno]:
+        if ('precipitation10m' in data[amdno]) or ('precipitation1h' in data[amdno]):
             print('multigraph amedas_{0}.precipitation'.format(amdno))
             print('graph_title {0} {1} - Precipitation'.format(amdno, citypref))
             print("graph_args --base 1000 -l 0 -u 8")
@@ -149,11 +151,13 @@ def print_config(data):
             print("graph_category weather")
             print("graph_info This graph shows amount of precipitation every 10 minutes")
             print("graph_scale no")
-            print('precipitation10m.label 10 minutes')
-            print('precipitation10m.info Precipitation 10 minutes')
-            print('precipitation10m.draw AREA')
-            print('precipitation1h.label 1 hour')
-            print('precipitation1h.info Precipitation 1 hour')
+            if 'precipitation10m' in data[amdno]:
+                print('precipitation10m.label 10 minutes')
+                print('precipitation10m.info Precipitation 10 minutes')
+                print('precipitation10m.draw AREA')
+            if 'precipitation1h' in data[amdno]:
+                print('precipitation1h.label 1 hour')
+                print('precipitation1h.info Precipitation 1 hour')
             print('')
         if 'pressure' in data[amdno]:
             print('multigraph amedas_{0}.pressure'.format(amdno))
@@ -179,18 +183,19 @@ def print_config(data):
             print('wind.info {}'.format(citypref))
             print('wind.type GAUGE')
             print('')
-        if 'windDirection' in data[amdno]:
-            print('multigraph amedas_{0}.wdir'.format(amdno))
-            print('graph_title {0} {1} - wind direction'.format(amdno, citypref))
-            print("graph_args --base 1000 -u 360 -l 0 -y 90:2")
-            print("graph_vlabel N:0 E:90 S:180 W:270")
-            print("graph_category weather")
-            print("graph_info This graph shows wind direction.")
-            print("graph_scale no")
-            print('wdir.label direction')
-            print('wdir.info {}'.format(citypref))
-            print('wdir.type GAUGE')
-            print('')
+        if not 'windDirection' in graph_exclude:
+            if 'windDirection' in data[amdno]:
+                print('multigraph amedas_{0}.wdir'.format(amdno))
+                print('graph_title {0} {1} - wind direction'.format(amdno, citypref))
+                print("graph_args --base 1000 -u 360 -l 0 -y 90:2")
+                print("graph_vlabel N:0 E:90 S:180 W:270")
+                print("graph_category weather")
+                print("graph_info This graph shows wind direction.")
+                print("graph_scale no")
+                print('wdir.label direction')
+                print('wdir.info {}'.format(citypref))
+                print('wdir.type GAUGE')
+                print('')
         if 'snow' in data[amdno]:
             print('multigraph amedas_{0}.snow'.format(amdno))
             print('graph_title {0} {1} - Snow depth'.format(amdno, citypref))
@@ -243,19 +248,22 @@ for amdno,info in locations.items():
     if 'humidity' in data[amdno]:
         print('multigraph amedas_{0}.humidity'.format(amdno))
         print('humidity.value {}'.format(data[amdno]['humidity'])) 
-    if 'precipitation10m' in data[amdno]:
+    if ('precipitation10m' in data[amdno]) or ('precipitation1h' in data[amdno]):
         print('multigraph amedas_{0}.precipitation'.format(amdno))
-        print('precipitation10m.value {}'.format(data[amdno]['precipitation10m'] if 'precipitation10m' in data[amdno] else 'U')) 
-        print('precipitation1h.value {}'.format(data[amdno]['precipitation1h'] if 'precipitation1h' in data[amdno] else 'U')) 
+        if 'precipitation10m' in data[amdno]:
+            print('precipitation10m.value {}'.format(data[amdno]['precipitation10m']))
+        if 'precipitation1h' in data[amdno]:
+            print('precipitation1h.value {}'.format(data[amdno]['precipitation1h'])) 
     if 'pressure' in data[amdno]:
         print('multigraph amedas_{0}.pressure'.format(amdno))
         print('pressure.value {}'.format(data[amdno]['pressure'] if 'pressure' in data[amdno] else 'U')) 
     if 'wind' in data[amdno]:
         print('multigraph amedas_{0}.wind'.format(amdno))
         print('wind.value {}'.format(data[amdno]['wind'] if 'wind' in data[amdno] else 'U'))
-    if 'windDirection' in data[amdno]:
-        print('multigraph amedas_{0}.wdir'.format(amdno))
-        print('wdir.value {}'.format(data[amdno]['windDirection'] * 22.5 if 'windDirection' in data[amdno] else 'U'))
+    if not 'windDirection' in graph_exclude:
+        if 'windDirection' in data[amdno]:
+            print('multigraph amedas_{0}.wdir'.format(amdno))
+            print('wdir.value {}'.format(data[amdno]['windDirection'] * 22.5 if 'windDirection' in data[amdno] else 'U'))
     if 'snow' in data[amdno]:
         print('multigraph amedas_{0}.snow'.format(amdno))
         print('snow.value {}'.format(data[amdno]['snow'])) 
