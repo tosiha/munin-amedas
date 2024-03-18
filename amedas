@@ -33,64 +33,47 @@ locations = {
 # 'temp','humidity','precipitation10m','precipitation1h','wind','windDirection','pressure','snow'
 graph_exclude = ['windDirection'];
 
-def get_from_jma(data_json, amdno, t):
+def update_locations_data(fetched_data, locations_data, latest_time):
     """
     www.jma.go.jp/bosai/amedas/ から 10分毎の気温、雨量、風向、風力、日照を得る
     """
-    h = t.hour
-    h3 = h - (h % 3)
-    url = 'https://www.jma.go.jp/bosai/amedas/data/point/{}/{:%Y%m%d}_{:02}.json'.format(amdno, t, h3)
-    logger.debug('get_from_jma(): url={}'.format(url))
-    try:
-        with urllib.request.urlopen(url) as f:
-            fetched_data = json.load(f)
-    except urllib.error.HTTPError as err:
-        logger.error(err)
-        return
-    except urllib.error.URLError as err:
-        logger.error(err)
-        return
-    except ConnectionResetError:
-        logger.warning('Connection reset by peer')
-        return
-    if amdno not in data_json:
-        logger.debug('add area_code {} to data_json'.format(amdno))
-        data_json[amdno] = {'snow': 'U'}
-    tar_time = max(fetched_data.keys())
-    logger.debug('elem={}'.format(fetched_data[tar_time]))
+    for amdno in locations:
+        if amdno not in locations_data:
+            logger.debug('add area_code {} to locations_data'.format(amdno))
+            locations_data[amdno] = {}
+        logger.debug('elem={}'.format(fetched_data[amdno]))
 
-    data_json[amdno]['time'] = tar_time
-    for k,v in fetched_data[tar_time].items():
-        if k == 'prefNumber':
-            data_json[amdno]['prefNumber'] = v
-        elif k == 'temp':
-            data_json[amdno]['temp'] = v[0]
-        elif k == 'humidity':
-            data_json[amdno]['humidity'] = v[0]
-        elif k == 'precipitation10m':
-            data_json[amdno]['precipitation10m'] = v[0]
-        elif k == 'precipitation1h':
-            data_json[amdno]['precipitation1h'] = v[0]
-        elif k == 'pressure':
-            data_json[amdno]['pressure'] = v[0]
-        elif k == 'sun10m':
-            data_json[amdno]['sun10m'] = v[0]
-        elif k == 'windDirection':
-            data_json[amdno]['windDirection'] = v[0]
-        elif k == 'wind':
-            data_json[amdno]['wind'] = v[0]
-        elif k == 'snow':
-            data_json[amdno]['snow'] = v[0]
+        locations_data[amdno]['time'] = '{:%Y-%m-%d %H:%M:%S}'.format(latest_time)
+        for k,v in fetched_data[amdno].items():
+            if k == 'temp':
+                locations_data[amdno]['temp'] = v[0]
+            elif k == 'humidity':
+                locations_data[amdno]['humidity'] = v[0]
+            elif k == 'precipitation10m':
+                locations_data[amdno]['precipitation10m'] = v[0]
+            elif k == 'precipitation1h':
+                locations_data[amdno]['precipitation1h'] = v[0]
+            elif k == 'pressure':
+                locations_data[amdno]['pressure'] = v[0]
+            elif k == 'sun10m':
+                locations_data[amdno]['sun10m'] = v[0]
+            elif k == 'windDirection':
+                locations_data[amdno]['windDirection'] = v[0]
+            elif k == 'wind':
+                locations_data[amdno]['wind'] = v[0]
+            elif k == 'snow':
+                locations_data[amdno]['snow'] = v[0]
+        #end for
+    #end for
 
 
 def update_data():
-    """data save"""
-    # 既存のデータを読み込む
+    # read saved data
     try:
         with open(JSONFILE, 'r') as f:
-            data_json = json.load(f)
+            locations_data = json.load(f)
     except FileNotFoundError:
-        data_json = {}
+        locations_data = {}
     # latest_time.txt を処理
     url = 'https://www.jma.go.jp/bosai/amedas/data/latest_time.txt'
     try:
@@ -105,15 +88,29 @@ def update_data():
     except ConnectionResetError:
         logger.warning('Connection reset by peer')
         return
-    logger.debug(html)
+    #logger.debug(html)
     latest_time = datetime.datetime.fromisoformat(html)
+    logger.debug('latest_time={}'.format(latest_time))
+    # fetch data from jma.go.jp
+    url = 'https://www.jma.go.jp/bosai/amedas/data/map/{:%Y%m%d%H%M%S}.json'.format(latest_time)
+    logger.debug('map_url={}'.format(url))
+    try:
+        with urllib.request.urlopen(url) as f:
+            fetched_data = json.load(f)
+    except urllib.error.HTTPError as err:
+        logger.warning(err)
+        return
+    except urllib.error.URLError as err:
+        logger.warning(err)
+        return
+    except ConnectionResetError:
+        logger.warning('Connection reset by peer')
+    logger.debug(fetched_data)
     # 各場所の処理
-    for amdno in locations:
-        '''気象庁(10min)'''
-        get_from_jma(data_json, amdno, latest_time)
-    # Output to json file
+    update_locations_data(fetched_data, locations_data, latest_time)
+    # save to jsonfile
     with open(JSONFILE, 'w') as fp:
-        json.dump(data_json, fp, indent=1, sort_keys=True)
+        json.dump(locations_data, fp, indent=1, sort_keys=True)
     os.chmod(JSONFILE, 0o664)
 
 #-------------------------------------------------------------------------- main
